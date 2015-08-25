@@ -1,0 +1,93 @@
+#!/bin/bash
+#set -e;
+
+# ip=$(netstat -nr | grep '^0\.0\.0\.0' | awk '{print $2}')
+
+ip=127.0.0.1
+port=3306
+
+_mysql () {
+  #  echo "echo \"$cmd\" | $mysql"
+  echo $1 | $2
+}
+
+home=/home/dokku-mysql
+admin_pw="$(cat $home/.dokku_mysql_admin_pw)"
+
+database_name() {
+  echo "d_$1" | cut -c 1-14 | tr .- _ | tr -cd '_[:alnum:]'
+}
+DB="$(database_name "$2")"
+
+case "$1" in
+  admin_console)
+    mysql -u root --password="$admin_pw" -h "$ip" -P "$port" mysql
+  ;;
+  exists)
+    if [[ -f "$home/db/$DB" ]]; then
+      exit 0
+    else
+      exit 1
+    fi
+  ;;
+  create)
+    if [[ -f "$home/db/$DB" ]]; then
+      echo "Database configured already exists with name : $DB"
+      exit 1
+    fi
+
+    name="$DB"
+    database_pw="$(openssl rand -base64 32|base64)"
+    echo "$database_pw" > "$home/db/$DB"
+
+    mysql="mysql -u root --password=$admin_pw -h $ip -P $port mysql"
+
+    _mysql "CREATE USER '$name'@'%' IDENTIFIED BY 'temporary_password';" "$mysql"
+    _mysql "SET PASSWORD FOR '$name'@'%' = PASSWORD('$database_pw');" "$mysql"
+    _mysql "CREATE DATABASE $name;" "$mysql"
+    _mysql "GRANT ALL PRIVILEGES ON $name.* to '$name'@'%';" "$mysql"
+  ;;
+  delete)
+    if [[ ! -f "$home/db/$DB" ]]; then
+      echo "Database not configured : $DB"
+      exit 1
+    fi
+
+    name="$DB"
+    mysql="mysql -u root --password=$admin_pw -h $ip -P $port mysql"
+
+    _mysql "DROP USER '$name'@'%';" "$mysql"
+    _mysql "DROP DATABASE $name;" "$mysql"
+
+    rm -f "$home/db/$DB"
+  ;;
+  list)
+    mysql="mysql -u root --password=$admin_pw -h $ip -P $port mysql"
+
+    _mysql "SHOW DATABASES;" "$mysql" | grep '^d_'
+  ;;
+  dump)
+    name="$DB"
+    database_pw=$(cat "$home/db/$DB")
+
+    mysqldump -u $name --password="$database_pw" -h "$ip" -P "$port" "$name"
+  ;;
+  restore)
+    name="$DB"
+    database_pw=$(cat "$home/db/$DB")
+
+    cat - | mysql -u $name --password="$database_pw" -h "$ip" -P "$port" "$name"
+  ;;
+  console)
+    name="$DB"
+    database_pw=$(cat "$home/db/$DB")
+
+    mysql -u $name --password="$database_pw" -h "$ip" -P "$port" $name
+  ;;
+  username)
+    echo "$DB"
+  ;;
+  password)
+    cat "$home/db/$DB"
+  ;;
+esac

@@ -1,0 +1,160 @@
+#!/bin/bash
+#set -e;
+
+_path=".dokku-mysql"
+version="1.0"
+
+DB=$2
+OLDHOME=$HOME
+HOME="$DOKKU_ROOT/$_path"
+
+ip_and_port="$(cat "$HOME/hostname"):3306"
+ip="$(cat "$HOME/hostname")"
+private_ip="$(cat "$HOME/hostname")"
+port=3306
+
+manage_ti() {
+  ssh -t dokku-mysql@$ip -- /home/dokku-mysql/manage $*
+}
+
+manage() {
+  ssh dokku-mysql@$ip -- /home/dokku-mysql/manage $*
+}
+
+check_exists() {
+  if ! manage exists "$DB"; then
+    echo "Database not found : $DB"
+    exit 1
+  fi
+}
+
+check_already_exists() {
+  if manage exists "$DB"; then
+    echo "Database configured already exists with name : $DB"
+    exit 1
+  fi
+}
+
+check_database() {
+  if [[ -z "$DB" ]]; then
+    echo "You must specify a database name"
+    exit 1
+  fi
+}
+
+db_url() {
+  _app=$1
+
+  _database=$(manage username "$1")
+  _database_pw=$(manage password "$1")
+
+  echo "mysql2://${_database}:${_database_pw}@${private_ip}:${port}/${_database}"
+}
+
+restart_app() {
+  _app=$1
+  if [[ -n "$_app" ]]&&[[ -d "$DOKKU_ROOT/$_app" ]]; then
+    echo "-----> Restarting application : $_app"
+    dokku release $_app
+    dokku deploy $_app
+  fi
+}
+
+restart_apps() {
+  echo "-----> Restarting applications"
+  _apps=()
+
+  cd "$HOME"
+  _files=$(ls pass_* 2> /dev/null)
+  for f in $_files; do
+    _apps+=($(echo "$f" | cut -d _ -f 2))
+  done
+
+  _files=$(ls link_* 2> /dev/null)
+  for f in $_files; do
+    _apps+=($(cat "$HOME/$f"))
+  done
+
+  _apps=$(echo "${_apps[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  for _app in $_apps; do
+    restart_app $_app
+  done
+}
+
+case "$1" in
+  mysql:console)
+    check_database
+    check_exists
+
+    manage_ti console "$DB"
+    ;;
+
+  mysql:url)
+    check_database
+    check_exists
+
+    db_url "$DB"
+    ;;
+
+  mysql:create)
+    check_database
+    check_already_exists
+
+    manage create "$DB"
+    ;;
+
+  mysql:delete)
+    check_database
+    check_exists
+
+    manage delete "$DB"
+    ;;
+
+  mysql:list)
+    manage list
+    ;;
+
+  mysql:dump)
+    check_database
+    check_exists
+
+    manage dump "$DB"
+    ;;
+
+  mysql:restore)
+    check_database
+    check_exists
+
+    cat - | manage restore "$DB"
+    ;;
+
+  mysql:install)
+    if [[ -d "$HOME" ]]; then
+      echo "MySQL data already exist in "$HOME", installation aborded "
+    fi
+
+    if [[ ! -d "$HOME" ]]; then
+      if [[ ! $2 ]]; then
+        echo "Give me a host name!"
+        exit 1
+      fi
+      mkdir "$HOME"
+      hostname="$2"
+      echo "$hostname" > "$HOME/hostname"
+      echo "$version" > "$HOME/version"
+
+      chown -R dokku: "$HOME"
+    fi
+    ;;
+
+  help)
+    cat && cat<<EOF
+    mysql:create   <database>               Create a MySQL database
+    mysql:delete   <database>               Delete specified MySQL database
+    mysql:url      <database>               Get DATABASE_URL for <database>
+    mysql:console  <database>               Launch a MySQL console for a given database
+    mysql:dump     <database> > <filename>  Dump database to SQL format
+    mysql:restore  <database> < <filename>  Restore database from SQL format
+EOF
+    ;;
+esac
